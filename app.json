@@ -1,30 +1,73 @@
 {
   "expo": {
-    "name": "salle-app",
+    "name": "Salle",
     "slug": "salle-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
+    "scheme": "salle",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0A0A0B"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": false,
+      "bundleIdentifier": "com.salle.app",
+      "infoPlist": {
+        "UIStatusBarStyle": "UIStatusBarStyleLightContent"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#0A0A0B"
       },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "package": "com.salle.app",
+      "edgeToEdgeEnabled": true
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0A0A0B",
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain"
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#C7FF3D"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Salle utilise ta galerie pour les photos de profil et de séances.",
+          "cameraPermission": "Salle utilise ta caméra pour prendre des photos de progression."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Salle a besoin d'accéder à ta galerie pour y enregistrer tes photos de progression.",
+          "savePhotosPermission": "Salle a besoin de cette permission pour enregistrer tes photos sur le téléphone.",
+          "isAccessMediaLocationEnabled": true
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true
     }
   }
 }

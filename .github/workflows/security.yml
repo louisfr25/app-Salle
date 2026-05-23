@@ -1,0 +1,119 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  schedule:
+    # Tous les lundis à 08h00 UTC — détecte les CVE publiées en dehors des commits
+    - cron: '0 8 * * 1'
+
+jobs:
+  npm-audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js ─────────────────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      # ── 3. Install (ci = exact lock, pas de màj silencieuse) ───────────
+      - name: Install dependencies
+        run: npm ci --prefer-offline
+
+      # ── 4. Audit principal ─────────────────────────────────────────────
+      # Échoue si une vulnérabilité HIGH ou CRITICAL est détectée.
+      # Les niveaux low/moderate sont signalés mais ne bloquent pas le build.
+      - name: Run npm audit (fail on high+)
+        id: audit
+        run: |
+          npm audit --audit-level high --json > audit-report.json || true
+          node - <<'EOF'
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync('audit-report.json', 'utf8'));
+          const meta   = report.metadata || {};
+          const vulns  = meta.vulnerabilities || {};
+
+          const critical = vulns.critical || 0;
+          const high     = vulns.high     || 0;
+          const moderate = vulns.moderate || 0;
+          const low      = vulns.low      || 0;
+          const total    = vulns.total    || (critical + high + moderate + low);
+
+          console.log(`\n📊 Résumé des vulnérabilités :`);
+          console.log(`  🔴 Critical : ${critical}`);
+          console.log(`  🟠 High     : ${high}`);
+          console.log(`  🟡 Moderate : ${moderate}`);
+          console.log(`  🔵 Low      : ${low}`);
+          console.log(`  Total       : ${total}\n`);
+
+          if (critical + high > 0) {
+            console.error(`❌ Build bloqué : ${critical} critical + ${high} high vulnérabilité(s) détectée(s).`);
+            process.exit(1);
+          }
+
+          if (moderate > 0) {
+            console.warn(`⚠️  ${moderate} vulnérabilité(s) modérée(s) — non bloquant, à corriger prochainement.`);
+          }
+
+          console.log('✅ Aucune vulnérabilité critique ou haute détectée.');
+          EOF
+
+      # ── 5. Upload du rapport JSON (consultable dans l'onglet Artifacts) ─
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report
+          path: audit-report.json
+          retention-days: 30
+
+      # ── 6. Résumé dans le job summary GitHub ──────────────────────────
+      - name: Post summary
+        if: always()
+        run: |
+          echo "## 🔐 npm audit — Résultats" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Niveau | Nombre |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|--------|" >> $GITHUB_STEP_SUMMARY
+          node - <<'EOF' >> $GITHUB_STEP_SUMMARY
+          const fs = require('fs');
+          try {
+            const report = JSON.parse(fs.readFileSync('audit-report.json', 'utf8'));
+            const v = (report.metadata || {}).vulnerabilities || {};
+            console.log(`| 🔴 Critical | ${v.critical || 0} |`);
+            console.log(`| 🟠 High     | ${v.high     || 0} |`);
+            console.log(`| 🟡 Moderate | ${v.moderate || 0} |`);
+            console.log(`| 🔵 Low      | ${v.low      || 0} |`);
+            console.log(`| **Total**   | **${v.total  || 0}** |`);
+          } catch { console.log('| Erreur de lecture du rapport | — |'); }
+          EOF
+
+  # ── Job séparé : vérifie que les secrets ne sont pas commités ────────
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # historique complet pour scanner tous les commits du PR
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}  # nécessaire pour les orgs privées

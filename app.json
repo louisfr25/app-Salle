@@ -3,6 +3,9 @@
     "name": "Salle",
     "slug": "salle-app",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -16,8 +19,26 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.salle.app",
+      "buildNumber": "1",
+      "requireFullScreen": true,
       "infoPlist": {
-        "UIStatusBarStyle": "UIStatusBarStyleLightContent"
+        "UIStatusBarStyle": "UIStatusBarStyleLightContent",
+        "NSCameraUsageDescription": "Salle utilise ta caméra pour prendre des photos de progression et de séances.",
+        "NSPhotoLibraryUsageDescription": "Salle accède à ta galerie pour les photos de profil et les photos de progression.",
+        "NSPhotoLibraryAddUsageDescription": "Salle enregistre tes photos de progression dans ta galerie.",
+        "NSUserNotificationUsageDescription": "Salle t'envoie des rappels pour tes séances d'entraînement.",
+        "NSMotionUsageDescription": "Salle utilise le podomètre pour compter tes pas quotidiens.",
+        "NSHealthShareUsageDescription": "Salle lit ton nombre de pas depuis Santé pour le suivi quotidien.",
+        "NSHealthUpdateUsageDescription": "Salle peut enregistrer tes données d'activité dans Santé.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "privacyManifests": {
+        "NSPrivacyAccessedAPITypes": [
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+            "NSPrivacyAccessedAPITypeReasons": ["CA92.1"]
+          }
+        ]
       }
     },
     "android": {
@@ -26,7 +47,16 @@
         "backgroundColor": "#0A0A0B"
       },
       "package": "com.salle.app",
-      "edgeToEdgeEnabled": true
+      "versionCode": 1,
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.ACTIVITY_RECOGNITION",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.VIBRATE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",

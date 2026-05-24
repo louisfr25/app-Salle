@@ -245,7 +245,7 @@ export default function CalendarScreen() {
       .lte('started_at', end)
       .order('started_at', { ascending: false });
 
-    setLogs((logsData ?? []) as CalendarLog[]);
+    setLogs((logsData ?? []) as unknown as CalendarLog[]);
 
     const { data: prog } = await supabase
       .from('programs')

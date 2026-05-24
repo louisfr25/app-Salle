@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Alert, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Alert, RefreshControl, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -33,7 +33,7 @@ export default function ProfileScreen() {
 
   const [achievements, setAchievements] = useState<Achievement[]>([]);
   const [unlocked, setUnlocked] = useState<Set<string>>(new Set());
-  const [stats, setStats] = useState({ workouts: 0, prs: 0 });
+  const [stats, setStats] = useState({ workouts: 0, prs: 0, totalHours: 0 });
   const [refreshing, setRefreshing] = useState(false);
 
   const load = async () => {
@@ -41,7 +41,7 @@ export default function ProfileScreen() {
     const user = session?.user;
     if (!user) return;
 
-    const [{ data: fresh }, { data: allAch }, { data: mine }, { count: wCount }, { count: prCount }] =
+    const [{ data: fresh }, { data: allAch }, { data: mine }, { count: wCount }, { count: prCount }, { data: durData }] =
       await Promise.all([
         supabase.from('profiles').select('*').eq('id', user.id).single(),
         supabase.from('achievements').select('*').order('xp_reward', { ascending: true }),
@@ -50,12 +50,17 @@ export default function ProfileScreen() {
           .eq('user_id', user.id).not('ended_at', 'is', null),
         supabase.from('personal_records').select('id', { count: 'exact', head: true })
           .eq('user_id', user.id),
+        supabase.from('workout_logs').select('duration_seconds')
+          .eq('user_id', user.id).not('ended_at', 'is', null).not('duration_seconds', 'is', null),
       ]);
+
+    const totalSec = (durData ?? []).reduce((a: number, l: any) => a + (l.duration_seconds ?? 0), 0);
+    const totalHours = Math.round(totalSec / 3600);
 
     if (fresh) setProfile(fresh as Profile);
     setAchievements((allAch ?? []) as Achievement[]);
     setUnlocked(new Set((mine ?? []).map((m: any) => m.achievements?.code).filter(Boolean)));
-    setStats({ workouts: wCount ?? 0, prs: prCount ?? 0 });
+    setStats({ workouts: wCount ?? 0, prs: prCount ?? 0, totalHours });
   };
 
   useFocusEffect(useCallback(() => { load(); }, []));
@@ -113,23 +118,59 @@ export default function ProfileScreen() {
           style={{ borderRadius: 20, padding: 20, borderWidth: 1, borderColor: `${colors.accent}25` }}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-            <View style={{
-              width: 64, height: 64, borderRadius: 32,
-              backgroundColor: colors.accent,
-              alignItems: 'center', justifyContent: 'center',
-            }}>
-              <Text style={{ fontSize: 28, fontWeight: '800', color: colors.accentInk }}>
-                {(profile?.username ?? 'A')[0].toUpperCase()}
-              </Text>
-            </View>
+            {/* Avatar — photo si disponible, sinon initiale */}
+            {profile?.avatar_url ? (
+              <Image
+                source={{ uri: profile.avatar_url }}
+                style={{ width: 64, height: 64, borderRadius: 32, borderWidth: 2, borderColor: colors.accent }}
+              />
+            ) : (
+              <View style={{
+                width: 64, height: 64, borderRadius: 32,
+                backgroundColor: colors.accent,
+                alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Text style={{ fontSize: 28, fontWeight: '800', color: colors.accentInk }}>
+                  {(profile?.username ?? 'A')[0].toUpperCase()}
+                </Text>
+              </View>
+            )}
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: 20, fontWeight: '800', color: colors.text }}>{profile?.username ?? '—'}</Text>
+              {profile?.full_name ? (
+                <Text style={{ fontSize: 13, color: colors.text2, marginTop: 1 }}>{profile.full_name}</Text>
+              ) : null}
               <Text style={{ fontSize: 13, color: colors.mute, marginTop: 2 }}>
-                {profile?.goal === 'muscle' ? 'Masse musculaire' :
-                 profile?.goal === 'strength' ? 'Force' :
-                 profile?.goal === 'weight_loss' ? 'Perte de poids' :
-                 profile?.goal === 'endurance' ? 'Endurance' : 'Objectif général'}
+                {profile?.goal === 'muscle' ? '💪 Masse musculaire' :
+                 profile?.goal === 'strength' ? '🏋️ Force' :
+                 profile?.goal === 'weight_loss' ? '🔥 Sèche' :
+                 profile?.goal === 'endurance' ? '🏃 Endurance' : '⚡ Objectif général'}
               </Text>
+              {/* Stats corporelles si renseignées */}
+              {(profile?.height_cm || profile?.weight_kg) ? (
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 5, flexWrap: 'wrap' }}>
+                  {profile?.height_cm ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: colors.surface2, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 3 }}>
+                      <Text style={{ fontSize: 10, color: colors.mute }}>📏</Text>
+                      <Text style={{ fontSize: 11, fontWeight: '600', color: colors.text2 }}>{profile.height_cm} cm</Text>
+                    </View>
+                  ) : null}
+                  {profile?.weight_kg ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: colors.surface2, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 3 }}>
+                      <Text style={{ fontSize: 10, color: colors.mute }}>⚖️</Text>
+                      <Text style={{ fontSize: 11, fontWeight: '600', color: colors.text2 }}>{profile.weight_kg} kg</Text>
+                    </View>
+                  ) : null}
+                  {profile?.height_cm && profile?.weight_kg ? (() => {
+                    const bmi = profile.weight_kg! / Math.pow(profile.height_cm! / 100, 2);
+                    return (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: colors.surface2, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 3 }}>
+                        <Text style={{ fontSize: 11, fontWeight: '600', color: colors.text2 }}>IMC {bmi.toFixed(1)}</Text>
+                      </View>
+                    );
+                  })() : null}
+                </View>
+              ) : null}
             </View>
             <View style={{ alignItems: 'center', gap: 6 }}>
               <View style={{ backgroundColor: `${colors.accent}20`, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8 }}>
@@ -151,16 +192,17 @@ export default function ProfileScreen() {
             <ProgressBar value={pct} />
           </View>
 
-          <View style={{ flexDirection: 'row', gap: 16, marginTop: 18 }}>
+          <View style={{ flexDirection: 'row', gap: 12, marginTop: 18 }}>
             {[
-              { label: 'XP total', value: profile?.xp ?? 0 },
+              { label: 'XP', value: profile?.xp ?? 0 },
               { label: 'Streak', value: `${profile?.streak_days ?? 0}j` },
               { label: 'Séances', value: stats.workouts },
               { label: 'Records', value: stats.prs },
+              { label: 'Heures', value: `${stats.totalHours}h` },
             ].map((s) => (
               <View key={s.label} style={{ flex: 1, alignItems: 'center' }}>
-                <Text style={{ fontSize: 17, fontWeight: '800', color: colors.accent }}>{s.value}</Text>
-                <Text style={{ fontSize: 10, color: colors.mute, marginTop: 2 }}>{s.label}</Text>
+                <Text style={{ fontSize: 15, fontWeight: '800', color: colors.accent }}>{s.value}</Text>
+                <Text style={{ fontSize: 9, color: colors.mute, marginTop: 2 }}>{s.label}</Text>
               </View>
             ))}
           </View>

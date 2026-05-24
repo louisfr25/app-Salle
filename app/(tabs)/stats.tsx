@@ -7,7 +7,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
-  RefreshControl, Modal, ActivityIndicator,
+  RefreshControl, Modal, ActivityIndicator, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
@@ -26,7 +26,25 @@ const DAYS_FR = ['L','M','M','J','V','S','D'];
 
 type WeightPeriod = '2w' | '1m' | '3m' | 'all';
 type PRPeriod = '30d' | '6m' | 'all';
-type Tab = 'progress' | 'muscles' | 'records';
+type Tab = 'progress' | 'muscles' | 'records' | 'exercises';
+
+// ── Types exercice ────────────────────────────────────────────────────
+interface ExerciseSummary {
+  exerciseId: string;
+  name: string;
+  muscleGroup: string;
+  maxWeight: number;
+  lastDate: string;       // ISO YYYY-MM-DD
+  trendPct: number | null; // % évolution 30j vs 30j précédents
+  sessionCount: number;
+}
+
+const MUSCLE_GROUP_FR: Record<string, string> = {
+  chest: 'Pectoraux',    back: 'Dos',      shoulders: 'Épaules',
+  biceps: 'Biceps',      triceps: 'Triceps', legs: 'Jambes',
+  glutes: 'Fessiers',    abs: 'Abdos',      cardio: 'Cardio',
+  full_body: 'Full body', other: 'Autre',
+};
 
 const WEIGHT_PERIOD_DAYS: Record<WeightPeriod, number | null> = {
   '2w': 14, '1m': 30, '3m': 90, all: null,
@@ -167,12 +185,20 @@ export default function StatsScreen() {
   // Muscles
   const [muscleVolume, setMuscleVolume] = useState<{ id: string; pct: number }[]>([]);
 
-  // Records
+  // Records (PRs)
   const [prs, setPrs] = useState<(PersonalRecord & { exercises: { name: string } })[]>([]);
   const [prDetail, setPrDetail] = useState<{ exerciseId: string; name: string } | null>(null);
   const [prPeriod, setPrPeriod] = useState<PRPeriod>('30d');
   const [prChart, setPrChart] = useState<LinePoint[]>([]);
   const [prLoading, setPrLoading] = useState(false);
+
+  // Exercices — courbes de progression
+  const [exerciseList, setExerciseList] = useState<ExerciseSummary[]>([]);
+  const [exDetail, setExDetail] = useState<{ exerciseId: string; name: string; muscleGroup: string } | null>(null);
+  const [exPeriod, setExPeriod] = useState<PRPeriod>('30d');
+  const [exChart, setExChart] = useState<LinePoint[]>([]);
+  const [exLoading, setExLoading] = useState(false);
+  const [exSearch, setExSearch] = useState('');
 
   // ── Courbe de poids filtrée ───────────────────────────────────────
   const weightPoints = (() => {
@@ -203,6 +229,7 @@ export default function StatsScreen() {
     if (!user) return;
 
     const twelveWeeksAgo = new Date(Date.now() - 84 * 86400000).toISOString();
+    const sixMonthsAgo   = new Date(Date.now() - 180 * 86400000).toISOString();
 
     const [
       { data: weightData },
@@ -210,6 +237,7 @@ export default function StatsScreen() {
       { data: logsData },
       { data: prData },
       { data: muscleData },
+      { data: exRawData },
     ] = await Promise.all([
       supabase.from('daily_logs')
         .select('date, body_weight_kg')
@@ -238,6 +266,14 @@ export default function StatsScreen() {
         .eq('user_id', user.id)
         .eq('week_start', weekStartStr())
         .order('volume_pct', { ascending: false }),
+
+      // Exercices — 6 derniers mois, avec poids (pour tab Exercices)
+      supabase.from('set_logs')
+        .select('exercise_id, weight_kg, completed_at, exercises(name, muscle_group), workout_logs!inner(user_id)')
+        .eq('workout_logs.user_id', user.id)
+        .not('weight_kg', 'is', null)
+        .gte('completed_at', sixMonthsAgo)
+        .order('completed_at', { ascending: true }),
     ]);
 
     // ── Poids corporel ────────────────────────────────────────────
@@ -302,6 +338,59 @@ export default function StatsScreen() {
 
     // ── PRs ───────────────────────────────────────────────────────
     setPrs((prData ?? []) as any);
+
+    // ── Exercices — groupement client-side ────────────────────────────
+    const thirtyDaysAgo = new Date(Date.now() - 30  * 86400000).toISOString().split('T')[0];
+    const sixtyDaysAgo  = new Date(Date.now() - 60  * 86400000).toISOString().split('T')[0];
+
+    const exMap = new Map<string, {
+      name: string; muscleGroup: string;
+      sets: { date: string; weight: number }[];
+    }>();
+
+    for (const s of (exRawData ?? []) as any[]) {
+      const id   = s.exercise_id as string;
+      const date = (s.completed_at as string).split('T')[0];
+      const w    = Number(s.weight_kg);
+      if (!exMap.has(id)) {
+        exMap.set(id, {
+          name:        s.exercises?.name        ?? id,
+          muscleGroup: s.exercises?.muscle_group ?? '',
+          sets: [],
+        });
+      }
+      exMap.get(id)!.sets.push({ date, weight: w });
+    }
+
+    const builtList: ExerciseSummary[] = [];
+    for (const [id, ex] of exMap.entries()) {
+      const recent   = ex.sets.filter((s) => s.date >= thirtyDaysAgo);
+      const previous = ex.sets.filter((s) => s.date >= sixtyDaysAgo && s.date < thirtyDaysAgo);
+
+      const maxRecent    = recent.length   > 0 ? Math.max(...recent.map((s)   => s.weight)) : 0;
+      const maxPrev      = previous.length > 0 ? Math.max(...previous.map((s) => s.weight)) : 0;
+      const lastDate     = ex.sets[ex.sets.length - 1]?.date ?? '';
+      const maxWeightAll = Math.max(...ex.sets.map((s) => s.weight));
+      const sessionDates = new Set(ex.sets.map((s) => s.date));
+
+      let trendPct: number | null = null;
+      if (maxPrev > 0 && maxRecent > 0) {
+        trendPct = Math.round(((maxRecent - maxPrev) / maxPrev) * 100);
+      }
+
+      builtList.push({
+        exerciseId:   id,
+        name:         ex.name,
+        muscleGroup:  ex.muscleGroup,
+        maxWeight:    maxWeightAll,
+        lastDate,
+        trendPct,
+        sessionCount: sessionDates.size,
+      });
+    }
+
+    builtList.sort((a, b) => b.lastDate.localeCompare(a.lastDate));
+    setExerciseList(builtList);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -351,6 +440,48 @@ export default function StatsScreen() {
     })();
   }, [prDetail, prPeriod]);
 
+  // ── Courbe exercice ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!exDetail) return;
+    (async () => {
+      setExLoading(true);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const user = session?.user;
+        if (!user) return;
+
+        let q = supabase
+          .from('set_logs')
+          .select('weight_kg, completed_at, workout_logs!inner(user_id)')
+          .eq('workout_logs.user_id', user.id)
+          .eq('exercise_id', exDetail.exerciseId)
+          .not('weight_kg', 'is', null)
+          .order('completed_at', { ascending: true });
+
+        if (exPeriod !== 'all') {
+          const days = exPeriod === '30d' ? 30 : 180;
+          q = q.gte('completed_at', new Date(Date.now() - days * 86400000).toISOString());
+        }
+        const { data } = await q;
+
+        // Poids max par jour
+        const best = new Map<string, number>();
+        for (const s of (data ?? []) as any[]) {
+          const day = (s.completed_at as string).split('T')[0];
+          best.set(day, Math.max(best.get(day) ?? 0, Number(s.weight_kg)));
+        }
+        setExChart(
+          Array.from(best.entries()).map(([day, v]) => ({
+            label: fmtDate(day),
+            value: v,
+          }))
+        );
+      } finally {
+        setExLoading(false);
+      }
+    })();
+  }, [exDetail, exPeriod]);
+
   // ── Calculs dérivés ───────────────────────────────────────────────
   const thisWeekTon = tonBars[tonBars.length - 1]?.value ?? 0;
   const lastWeekTon = tonBars[tonBars.length - 2]?.value ?? 0;
@@ -384,9 +515,10 @@ export default function StatsScreen() {
         {/* Onglets */}
         <View style={{ flexDirection: 'row', backgroundColor: colors.surface, borderRadius: 12, borderWidth: 1, borderColor: colors.border, padding: 4 }}>
           {([
-            ['progress', '📈 Progression'],
-            ['muscles',  '💪 Muscles'],
-            ['records',  '🏆 Records'],
+            ['progress',  '📈 Courbes'],
+            ['muscles',   '💪 Muscles'],
+            ['records',   '🏆 Records'],
+            ['exercises', '🔥 Exercices'],
           ] as [Tab, string][]).map(([t, l]) => (
             <TouchableOpacity
               key={t}
@@ -397,7 +529,7 @@ export default function StatsScreen() {
                 alignItems: 'center',
               }}
             >
-              <Text style={{ fontSize: 11, fontWeight: '600', color: tab === t ? colors.text : colors.mute }}>
+              <Text style={{ fontSize: 10, fontWeight: '600', color: tab === t ? colors.text : colors.mute }}>
                 {l}
               </Text>
             </TouchableOpacity>
@@ -593,6 +725,141 @@ export default function StatsScreen() {
             </>
           )
         )}
+        {/* ═══ ONGLET EXERCICES ═════════════════════════════════════ */}
+        {tab === 'exercises' && (
+          exerciseList.length === 0 ? (
+            <SectionCard title="Progression par exercice" sub="6 derniers mois" colors={colors}>
+              <View style={{ alignItems: 'center', gap: 10, padding: 16 }}>
+                <Text style={{ fontSize: 32 }}>📈</Text>
+                <Text style={{ fontSize: 14, color: colors.mute, textAlign: 'center', lineHeight: 20 }}>
+                  Aucun exercice avec poids enregistré.{'\n'}Lance une séance pour alimenter les courbes !
+                </Text>
+              </View>
+            </SectionCard>
+          ) : (
+            <>
+              {/* Barre de recherche */}
+              <View style={{
+                flexDirection: 'row', alignItems: 'center', gap: 10,
+                backgroundColor: colors.surface, borderRadius: 12,
+                borderWidth: 1, borderColor: colors.border,
+                paddingHorizontal: 14, paddingVertical: 10,
+              }}>
+                <Ionicons name="search-outline" size={16} color={colors.mute} />
+                <TextInput
+                  placeholder="Rechercher un exercice…"
+                  placeholderTextColor={colors.mute}
+                  value={exSearch}
+                  onChangeText={setExSearch}
+                  autoCapitalize="none"
+                  style={{ flex: 1, fontSize: 14, color: colors.text }}
+                />
+                {exSearch.length > 0 && (
+                  <TouchableOpacity onPress={() => setExSearch('')}>
+                    <Ionicons name="close-circle" size={16} color={colors.mute} />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              <Text style={{ fontSize: 12, color: colors.mute }}>
+                {exerciseList.length} exercice{exerciseList.length > 1 ? 's' : ''} • Touche pour voir la courbe de progression
+              </Text>
+
+              {exerciseList
+                .filter((ex) =>
+                  exSearch.length === 0 ||
+                  ex.name.toLowerCase().includes(exSearch.toLowerCase())
+                )
+                .map((ex) => {
+                  const mgFr = MUSCLE_GROUP_FR[ex.muscleGroup] ?? ex.muscleGroup;
+                  const trendColor = ex.trendPct === null
+                    ? colors.mute
+                    : ex.trendPct > 0
+                      ? colors.success
+                      : ex.trendPct < 0 ? colors.danger : colors.mute;
+                  const trendText = ex.trendPct === null ? null
+                    : `${ex.trendPct > 0 ? '+' : ''}${ex.trendPct}%`;
+                  const lastDateFmt = ex.lastDate
+                    ? new Date(ex.lastDate).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
+                    : '';
+
+                  return (
+                    <TouchableOpacity
+                      key={ex.exerciseId}
+                      activeOpacity={0.75}
+                      onPress={() => {
+                        setExDetail({ exerciseId: ex.exerciseId, name: ex.name, muscleGroup: mgFr });
+                        setExPeriod('30d');
+                      }}
+                    >
+                      <View style={{
+                        backgroundColor: colors.surface, borderRadius: 14,
+                        borderWidth: 1, borderColor: colors.border,
+                        padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12,
+                      }}>
+                        {/* Icône */}
+                        <View style={{
+                          width: 44, height: 44, borderRadius: 12,
+                          backgroundColor: `${colors.accent}18`,
+                          alignItems: 'center', justifyContent: 'center',
+                        }}>
+                          <Ionicons name="trending-up" size={22} color={colors.accent} />
+                        </View>
+
+                        {/* Infos */}
+                        <View style={{ flex: 1, gap: 3 }}>
+                          <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }} numberOfLines={1}>
+                            {ex.name}
+                          </Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            {mgFr ? (
+                              <View style={{
+                                backgroundColor: colors.surface2, borderRadius: 6,
+                                paddingHorizontal: 6, paddingVertical: 2,
+                              }}>
+                                <Text style={{ fontSize: 10, color: colors.mute }}>{mgFr}</Text>
+                              </View>
+                            ) : null}
+                            <Text style={{ fontSize: 11, color: colors.mute }}>
+                              {ex.sessionCount} séance{ex.sessionCount > 1 ? 's' : ''} · {lastDateFmt}
+                            </Text>
+                          </View>
+                        </View>
+
+                        {/* Stats droite */}
+                        <View style={{ alignItems: 'flex-end', gap: 3 }}>
+                          <Text style={{ fontSize: 16, fontWeight: '800', color: colors.text }}>
+                            {ex.maxWeight} kg
+                          </Text>
+                          {trendText ? (
+                            <View style={{
+                              flexDirection: 'row', alignItems: 'center', gap: 3,
+                              backgroundColor: `${trendColor}18`, borderRadius: 6,
+                              paddingHorizontal: 6, paddingVertical: 2,
+                            }}>
+                              <Ionicons
+                                name={ex.trendPct! > 0 ? 'arrow-up' : 'arrow-down'}
+                                size={10}
+                                color={trendColor}
+                              />
+                              <Text style={{ fontSize: 11, fontWeight: '700', color: trendColor }}>
+                                {trendText} · 30j
+                              </Text>
+                            </View>
+                          ) : (
+                            <Text style={{ fontSize: 10, color: colors.mute }}>—</Text>
+                          )}
+                        </View>
+                        <Ionicons name="chevron-forward" size={16} color={colors.mute} />
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })
+              }
+            </>
+          )
+        )}
+
       </ScrollView>
 
       {/* ══ Modal : progression 1RM ════════════════════════════════ */}
@@ -652,6 +919,79 @@ export default function StatsScreen() {
               </View>
             ) : (
               <LineChart data={prChart} unit=" kg" />
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* ══ Modal : progression exercice (poids réel) ══════════════ */}
+      <Modal
+        visible={!!exDetail}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setExDetail(null)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'flex-end' }}>
+          <View style={{
+            backgroundColor: colors.surface, padding: 20, paddingBottom: 36,
+            borderTopLeftRadius: 24, borderTopRightRadius: 24,
+            borderWidth: 1, borderColor: colors.border,
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 4 }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 18, fontWeight: '800', color: colors.text }} numberOfLines={1}>
+                  {exDetail?.name}
+                </Text>
+                {exDetail?.muscleGroup ? (
+                  <Text style={{ fontSize: 12, color: colors.mute, marginTop: 2 }}>{exDetail.muscleGroup}</Text>
+                ) : null}
+              </View>
+              <TouchableOpacity onPress={() => setExDetail(null)} style={{ padding: 4 }}>
+                <Ionicons name="close" size={22} color={colors.mute} />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ fontSize: 12, color: colors.mute, marginBottom: 14 }}>
+              Poids max soulevé par séance (kg)
+            </Text>
+
+            {/* Sélecteur période */}
+            <View style={{
+              flexDirection: 'row', backgroundColor: colors.surface2,
+              borderRadius: 12, padding: 4, marginBottom: 14,
+            }}>
+              {(['30d', '6m', 'all'] as PRPeriod[]).map((p) => (
+                <TouchableOpacity
+                  key={p}
+                  onPress={() => setExPeriod(p)}
+                  style={{
+                    flex: 1, paddingVertical: 8, borderRadius: 9,
+                    backgroundColor: exPeriod === p ? colors.accent : 'transparent',
+                    alignItems: 'center',
+                  }}
+                >
+                  <Text style={{
+                    fontSize: 13, fontWeight: '700',
+                    color: exPeriod === p ? colors.accentInk : colors.mute,
+                  }}>
+                    {PR_PERIOD_LABEL[p]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {exLoading ? (
+              <View style={{ height: 180, alignItems: 'center', justifyContent: 'center' }}>
+                <ActivityIndicator color={colors.accent} />
+              </View>
+            ) : exChart.length < 2 ? (
+              <View style={{ height: 180, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                <Ionicons name="analytics-outline" size={36} color={colors.mute} />
+                <Text style={{ color: colors.mute, fontSize: 13, textAlign: 'center' }}>
+                  Pas assez de séances sur cette période.{'\n'}Entraîne-toi pour voir la courbe !
+                </Text>
+              </View>
+            ) : (
+              <LineChart data={exChart} unit=" kg" />
             )}
           </View>
         </View>

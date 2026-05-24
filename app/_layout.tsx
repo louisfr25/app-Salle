@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, ActivityIndicator } from 'react-native';
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
@@ -32,25 +32,36 @@ export default function RootLayout() {
 
     supabase.auth.getSession()
       .then(async ({ data: { session } }) => {
-        // ① On sait maintenant si l'utilisateur est connecté → on affiche l'app
-        setReady(true);
         clearTimeout(safetyTimer);
 
-        // ② Chargement du profil en arrière-plan (réseau)
         if (session?.user) {
+          // Charge le profil AVANT d'afficher l'app pour détecter l'onboarding
           const { data } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', session.user.id)
             .single();
+
           if (data) {
             setProfile(data as Profile);
             useAppStore.getState().setPalette((data as Profile).palette ?? 'volt');
+            setReady(true);
+            // Si l'utilisateur n'a pas encore choisi son objectif → onboarding
+            if (!data.goal) {
+              router.replace('/onboarding' as any);
+            }
+          } else {
+            // Profil introuvable → premier lancement, onboarding
+            setReady(true);
+            router.replace('/onboarding' as any);
           }
+        } else {
+          // Non authentifié → écran de connexion
+          setReady(true);
         }
       })
       .catch(() => {
-        // Erreur réseau ou Supabase indisponible → on affiche quand même l'app
+        // Erreur réseau → on affiche quand même l'app
         setReady(true);
         clearTimeout(safetyTimer);
       });

@@ -15,6 +15,7 @@ import { useAppStore } from '../../lib/store/useAppStore';
 import { supabase } from '../../lib/supabase';
 import { finalizeWorkout, type WorkoutResult } from '../../lib/gamification';
 import { scheduleRestEnd, cancelNotification } from '../../lib/notifications';
+import { computeProgression, type ProgressionSuggestion } from '../../lib/progressionService';
 import { playRestEndSound } from '../../lib/sound';
 import { EXERCISE_LIBRARY } from '../../constants/exercises';
 import { ProgressBar } from '../../components/ui/ProgressBar';
@@ -56,6 +57,8 @@ export default function ActiveWorkoutScreen() {
   const [loading, setLoading] = useState(true);
   const [finishing, setFinishing] = useState(false);
   const [result, setResult] = useState<WorkoutResult | null>(null);
+  // Suggestions de progressive overload par index d'exercice
+  const [suggestions, setSuggestions] = useState<ProgressionSuggestion[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [search, setSearch] = useState('');
   // Photo de séance
@@ -115,9 +118,11 @@ export default function ActiveWorkoutScreen() {
               .order('completed_at', { ascending: false })
               .limit(s.sets);
 
+            const prevSets = (prev ?? []).reverse();
             return {
               sessionExercise: s as SessionExercise,
               exerciseName: s.exercises?.name ?? '',
+              muscleGroup: s.exercises?.muscle_group ?? '',
               sets: Array.from({ length: s.sets }, (_, i) => ({
                 setIndex: i,
                 reps: s.reps,
@@ -125,14 +130,25 @@ export default function ActiveWorkoutScreen() {
                 completed: false,
                 isResting: false,
               })),
-              previousSets: (prev ?? []).reverse().map((p: any) => ({
+              previousSets: prevSets.map((p: any) => ({
                 reps: p.reps,
                 weight: p.weight_kg,
               })),
+              // Pré-remplir le poids avec la dernière valeur connue
+              _suggestion: computeProgression(
+                prevSets.map((p: any) => ({ reps: p.reps, weight_kg: p.weight_kg })),
+                s.reps,
+                s.sets,
+                s.exercises?.muscle_group,
+              ),
             };
           })
         );
         setExercises(activeExercises);
+        // Extraire les suggestions dans un tableau parallèle aux exercices
+        setSuggestions(
+          activeExercises.map((ae: any) => ae._suggestion ?? computeProgression([], 0, 0))
+        );
       }
     }
 
@@ -492,6 +508,37 @@ export default function ActiveWorkoutScreen() {
           <Text style={{ fontSize: 20, fontWeight: '800', color: colors.text, marginBottom: 4 }}>
             {currentEx.exerciseName}
           </Text>
+
+          {/* ── Suggestion progressive overload ──────────────────────── */}
+          {suggestions[currentExerciseIndex] &&
+           suggestions[currentExerciseIndex].type !== 'first_time' && (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: 10,
+              backgroundColor: suggestions[currentExerciseIndex].type === 'increase_weight' || suggestions[currentExerciseIndex].type === 'increase_reps'
+                ? `${colors.accent}18` : `${colors.surface2}`,
+              borderRadius: 12, padding: 10,
+              borderWidth: 1,
+              borderColor: suggestions[currentExerciseIndex].type === 'increase_weight' || suggestions[currentExerciseIndex].type === 'increase_reps'
+                ? `${colors.accent}40` : colors.border,
+            }}>
+              <Text style={{ fontSize: 16 }}>
+                {suggestions[currentExerciseIndex].emoji}
+              </Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: colors.mute, textTransform: 'uppercase', letterSpacing: 0.3 }}>
+                  Progressive overload
+                </Text>
+                <Text style={{
+                  fontSize: 13, fontWeight: '600',
+                  color: suggestions[currentExerciseIndex].type === 'increase_weight' || suggestions[currentExerciseIndex].type === 'increase_reps'
+                    ? colors.accent : colors.text2,
+                  marginTop: 2,
+                }}>
+                  {suggestions[currentExerciseIndex].message}
+                </Text>
+              </View>
+            </View>
+          )}
 
           {/* Rest time editor (per exercise — works for free sessions too) */}
           <Card padding={12} style={{ gap: 10 }}>

@@ -96,13 +96,14 @@ export default function ProfileScreen() {
   const unlockedCount = achievements.filter((a) => unlocked.has(a.code)).length;
 
   const menuItems = [
-    { icon: 'barbell-outline',  label: 'Mon programme',       route: '/program' },
-    { icon: 'time-outline',     label: 'Historique des séances', route: '/history' },
-    { icon: 'images-outline',   label: 'Ma galerie photos',   route: '/gallery' },
-    { icon: 'body-outline',     label: 'Analyse musculaire',  route: '/body' },
-    { icon: 'trophy-outline',   label: 'Classements',         route: '/rankings' },
-    { icon: 'nutrition-outline',label: 'Suivi quotidien',     route: '/daily' },
-    { icon: 'settings-outline', label: 'Paramètres',          route: '/settings' },
+    { icon: 'barbell-outline',  label: 'Mon programme',          route: '/program' },
+    { icon: 'time-outline',     label: 'Historique des séances',  route: '/history' },
+    { icon: 'resize-outline',   label: 'Mes mensurations',        route: '/measurements' },
+    { icon: 'images-outline',   label: 'Ma galerie photos',       route: '/gallery' },
+    { icon: 'body-outline',     label: 'Analyse musculaire',      route: '/body' },
+    { icon: 'trophy-outline',   label: 'Classements',             route: '/rankings' },
+    { icon: 'nutrition-outline',label: 'Suivi quotidien',         route: '/daily' },
+    { icon: 'settings-outline', label: 'Paramètres',              route: '/settings' },
   ];
 
   return (

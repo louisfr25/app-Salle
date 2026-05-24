@@ -265,7 +265,7 @@ export default function DashboardScreen() {
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
           {[
             { icon: '🧍', label: 'Analyse musculaire', route: '/body' },
-            { icon: '🏆', label: 'Classements', route: '/rankings' },
+            { icon: '📖', label: 'Historique', route: '/history' },
             { icon: '🍎', label: 'Suivi quotidien', route: '/daily' },
             { icon: '📋', label: 'Mon programme', route: '/program' },
           ].map((item) => (

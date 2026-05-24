@@ -16,6 +16,7 @@ import { supabase } from '../../lib/supabase';
 import { Card } from '../../components/ui/Card';
 import { SectionTitle } from '../../components/ui/SectionTitle';
 import { ProgressBar } from '../../components/ui/ProgressBar';
+import { scheduleWorkoutReminders } from '../../lib/notifications';
 import type { WorkoutLog, Program, ProgramSession } from '../../lib/database.types';
 
 interface DaySession {
@@ -87,6 +88,17 @@ export default function DashboardScreen() {
         ) ?? false;
         setTodaySession({ session: daySession, completed: done });
       }
+
+      // ── Planifier les rappels séances pour les 7 prochains jours ──
+      const reminders: { name: string; date: Date }[] = [];
+      for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+        const d = new Date(today);
+        d.setDate(today.getDate() + dayOffset);
+        const isoDay = (d.getDay() + 6) % 7; // 0=Lun … 6=Dim
+        const s = sessions.find((se) => se.day_index === isoDay);
+        if (s) reminders.push({ name: s.name, date: d });
+      }
+      scheduleWorkoutReminders(reminders).catch(() => {});
     }
   };
 

@@ -433,6 +433,17 @@ export default function GenerateProgramScreen() {
             size="lg"
             style={{ marginTop: 4 }}
           />
+
+          {/* Lien alternatif — programme manuel */}
+          <TouchableOpacity
+            onPress={() => router.replace('/program/manual' as any)}
+            style={{ alignItems: 'center', paddingVertical: 6 }}
+          >
+            <Text style={{ fontSize: 13, color: colors.mute }}>
+              Préfères-tu{' '}
+              <Text style={{ color: colors.accent, fontWeight: '600' }}>créer ton programme manuellement ?</Text>
+            </Text>
+          </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
     );

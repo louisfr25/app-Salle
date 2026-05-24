@@ -397,14 +397,28 @@ export default function ProgramScreen() {
             Aucun programme actif
           </Text>
           <Text style={{ fontSize: 14, color: colors.mute, textAlign: 'center', lineHeight: 20 }}>
-            Génère un programme avec l'IA ou crée-le à la main.
+            Génère un programme avec l'IA ou crée-le manuellement.
           </Text>
+          {/* IA */}
           <TouchableOpacity
             onPress={() => router.push('/program/generate' as any)}
-            style={{ backgroundColor: colors.accent, borderRadius: 14, paddingHorizontal: 24, paddingVertical: 14 }}
+            style={{ backgroundColor: colors.accent, borderRadius: 14, paddingHorizontal: 24, paddingVertical: 14, width: '100%', alignItems: 'center' }}
           >
             <Text style={{ color: colors.accentInk, fontWeight: '800', fontSize: 15 }}>
-              ✨ Créer un programme
+              ✨ Générer avec l'IA
+            </Text>
+          </TouchableOpacity>
+          {/* Manuel */}
+          <TouchableOpacity
+            onPress={() => router.push('/program/manual' as any)}
+            style={{
+              borderRadius: 14, paddingHorizontal: 24, paddingVertical: 14,
+              width: '100%', alignItems: 'center',
+              backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
+            }}
+          >
+            <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15 }}>
+              🛠️ Créer manuellement
             </Text>
           </TouchableOpacity>
         </View>

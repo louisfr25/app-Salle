@@ -3,6 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, TextInput, Alert, AppState, ActivityIndicator,
   Modal, FlatList, Image,
 } from 'react-native';
+import Svg, { Circle as SvgCircle } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -63,10 +64,12 @@ export default function ActiveWorkoutScreen() {
   const [photoUploading, setPhotoUploading] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
-  const elapsedRef = useRef(elapsedSeconds);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const restRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const restNotifId = useRef<string | null>(null);
+  const elapsedRef      = useRef(elapsedSeconds);
+  const timerRef        = useRef<ReturnType<typeof setInterval> | null>(null);
+  const restRef         = useRef<ReturnType<typeof setInterval> | null>(null);
+  const restNotifId     = useRef<string | null>(null);
+  const restRemainingRef = useRef(restSeconds);   // ref pour modifier depuis +30s
+  const restTotalRef    = useRef(restSeconds);    // durée initiale (pour l'arc)
   const [restRemaining, setRestRemaining] = useState(restSeconds);
 
   // Load session
@@ -268,32 +271,34 @@ export default function ActiveWorkoutScreen() {
 
     // Auto-start rest
     const restDuration = ex.sessionExercise.rest_seconds ?? 90;
+    restRemainingRef.current = restDuration;
+    restTotalRef.current     = restDuration;
     setRestRemaining(restDuration);
     startRest(restDuration);
 
-    // Schedule a notification so the user is alerted even if the app
-    // is backgrounded during their rest.
     scheduleRestEnd(restDuration).then((id) => { restNotifId.current = id; });
 
-    // Rest countdown
-    let remaining = restDuration;
+    clearInterval(restRef.current!);
     restRef.current = setInterval(() => {
-      remaining -= 1;
-      setRestRemaining(remaining);
-      if (remaining <= 0) {
+      restRemainingRef.current -= 1;
+      setRestRemaining(restRemainingRef.current);
+      if (restRemainingRef.current <= 0) {
         clearInterval(restRef.current!);
         stopRest();
-        // Cancel the (background) notification — we're in foreground, the
-        // in-app beep + haptics are the cue.
         cancelNotification(restNotifId.current);
         restNotifId.current = null;
-        // Real audible beep + strong triple haptic buzz.
         playRestEndSound();
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setTimeout(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning), 250);
         setTimeout(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning), 550);
       }
     }, 1000);
+  };
+
+  // Ajouter 30 secondes au repos en cours
+  const handleAdd30 = () => {
+    restRemainingRef.current += 30;
+    setRestRemaining(restRemainingRef.current);
   };
 
   const handleFinishWorkout = async () => {
@@ -401,30 +406,20 @@ export default function ActiveWorkoutScreen() {
         </Text>
       </View>
 
-      {/* Rest overlay */}
+      {/* ── Rest overlay — cercle SVG animé ──────────────────────── */}
       {isResting && (
-        <View style={{
-          position: 'absolute', inset: 0, zIndex: 10,
-          backgroundColor: `${colors.bg}F0`,
-          alignItems: 'center', justifyContent: 'center',
-        }}>
-          <Text style={{ fontSize: 11, fontWeight: '700', color: colors.mute, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 16 }}>Repos</Text>
-          <Text style={{ fontSize: 80, fontWeight: '800', color: colors.accent, fontFamily: 'monospace', lineHeight: 90 }}>
-            {restRemaining}
-          </Text>
-          <Text style={{ fontSize: 15, color: colors.mute, marginTop: 8 }}>secondes</Text>
-          <TouchableOpacity
-            onPress={() => {
-              stopRest();
-              clearInterval(restRef.current!);
-              cancelNotification(restNotifId.current);
-              restNotifId.current = null;
-            }}
-            style={{ marginTop: 32, backgroundColor: colors.surface2, borderRadius: 14, paddingHorizontal: 24, paddingVertical: 12, borderWidth: 1, borderColor: colors.border }}
-          >
-            <Text style={{ color: colors.text, fontWeight: '600' }}>Passer le repos</Text>
-          </TouchableOpacity>
-        </View>
+        <RestTimerOverlay
+          remaining={restRemaining}
+          total={restTotalRef.current}
+          colors={colors}
+          onSkip={() => {
+            clearInterval(restRef.current!);
+            stopRest();
+            cancelNotification(restNotifId.current);
+            restNotifId.current = null;
+          }}
+          onAdd30={handleAdd30}
+        />
       )}
 
       {/* ── Bannière photo ─────────────────────────────────────────── */}
@@ -908,5 +903,112 @@ export default function ActiveWorkoutScreen() {
         </View>
       )}
     </SafeAreaView>
+  );
+}
+
+// ── Composant : timer de repos visuel ─────────────────────────────────────────
+const REST_MESSAGES = [
+  'Récupère bien 💪',
+  'Prépare-toi mentalement',
+  'Reste concentré(e) 🧠',
+  'Tu assures ! 🔥',
+  'Presque prêt(e) !',
+];
+
+function RestTimerOverlay({
+  remaining, total, colors, onSkip, onAdd30,
+}: {
+  remaining: number; total: number; colors: any;
+  onSkip: () => void; onAdd30: () => void;
+}) {
+  const SIZE = 220;
+  const CX = SIZE / 2;
+  const CY = SIZE / 2;
+  const R = 88;
+  const STROKE = 10;
+  const circumference = 2 * Math.PI * R;
+  const progress = Math.max(0, Math.min(1, remaining / Math.max(total, 1)));
+  const dashOffset = circumference * (1 - progress);
+
+  const ringColor = remaining <= 5
+    ? colors.danger
+    : remaining <= 15
+    ? colors.warn
+    : colors.accent;
+
+  const msgIdx = Math.floor((1 - progress) * (REST_MESSAGES.length - 0.01));
+
+  return (
+    <View style={{
+      position: 'absolute', inset: 0, zIndex: 10,
+      backgroundColor: `${colors.bg}F2`,
+      alignItems: 'center', justifyContent: 'center',
+    }}>
+      <Text style={{
+        fontSize: 11, fontWeight: '700', color: colors.mute,
+        textTransform: 'uppercase', letterSpacing: 2, marginBottom: 24,
+      }}>
+        Temps de repos
+      </Text>
+
+      {/* Cercle SVG */}
+      <View style={{ width: SIZE, height: SIZE, alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
+          {/* Fond */}
+          <SvgCircle cx={CX} cy={CY} r={R} fill="none" stroke={colors.surface3} strokeWidth={STROKE} />
+          {/* Arc progression */}
+          <SvgCircle
+            cx={CX} cy={CY} r={R}
+            fill="none"
+            stroke={ringColor}
+            strokeWidth={STROKE}
+            strokeDasharray={`${circumference} ${circumference}`}
+            strokeDashoffset={dashOffset}
+            strokeLinecap="round"
+            transform={`rotate(-90 ${CX} ${CY})`}
+          />
+        </Svg>
+        {/* Chiffre centré sur le cercle */}
+        <View style={{ position: 'absolute', alignItems: 'center' }}>
+          <Text style={{
+            fontSize: 62, fontWeight: '800',
+            color: ringColor, fontFamily: 'monospace', lineHeight: 68,
+          }}>
+            {remaining}
+          </Text>
+          <Text style={{ fontSize: 12, color: colors.mute }}>secondes</Text>
+        </View>
+      </View>
+
+      {/* Message motivant */}
+      <Text style={{ fontSize: 15, color: colors.text2, marginTop: 20, fontStyle: 'italic' }}>
+        {REST_MESSAGES[Math.min(msgIdx, REST_MESSAGES.length - 1)]}
+      </Text>
+
+      {/* Boutons */}
+      <View style={{ flexDirection: 'row', gap: 12, marginTop: 32 }}>
+        <TouchableOpacity
+          onPress={onAdd30}
+          style={{
+            backgroundColor: colors.surface2, borderRadius: 14,
+            paddingHorizontal: 22, paddingVertical: 13,
+            borderWidth: 1, borderColor: colors.border,
+          }}
+        >
+          <Text style={{ color: colors.text2, fontWeight: '700', fontSize: 15 }}>+30s</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={onSkip}
+          style={{
+            backgroundColor: ringColor, borderRadius: 14,
+            paddingHorizontal: 30, paddingVertical: 13,
+          }}
+        >
+          <Text style={{ color: colors.accentInk, fontWeight: '800', fontSize: 15 }}>
+            Passer ⚡
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 }

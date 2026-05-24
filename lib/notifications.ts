@@ -6,9 +6,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
-const KEY_ENABLED = 'notif_enabled';
-const KEY_STREAK_ID = 'notif_streak_id';
-const KEY_HYDRATION_ID = 'notif_hydration_id';
+const KEY_ENABLED           = 'notif_enabled';
+const KEY_STREAK_ID         = 'notif_streak_id';
+const KEY_HYDRATION_ID      = 'notif_hydration_id';
+const KEY_WORKOUT_REMINDER_IDS = 'notif_workout_reminder_ids';
 
 let handlerSet = false;
 
@@ -226,6 +227,54 @@ export async function scheduledCount(): Promise<number> {
     return list?.length ?? 0;
   } catch {
     return 0;
+  }
+}
+
+// ── Rappels séances planifiées ───────────────────────────────
+/**
+ * Planifie une notification à 08h00 le matin de chaque séance.
+ * sessions = [{ name, date }] pour les 7 prochains jours max.
+ * Annule les anciens rappels avant d'en créer de nouveaux.
+ */
+export async function scheduleWorkoutReminders(
+  sessions: { name: string; date: Date }[],
+): Promise<void> {
+  try {
+    if (!(await getNotificationsEnabled())) return;
+    const N = await getN();
+    if (!N) return;
+
+    // Annuler les rappels précédents
+    const prevRaw = await AsyncStorage.getItem(KEY_WORKOUT_REMINDER_IDS);
+    if (prevRaw) {
+      const prevIds = JSON.parse(prevRaw) as string[];
+      await Promise.all(prevIds.map((id) => N.cancelScheduledNotificationAsync(id).catch(() => {})));
+    }
+
+    const newIds: string[] = [];
+    for (const s of sessions) {
+      // 08h00 le jour de la séance
+      const trigger = new Date(s.date);
+      trigger.setHours(8, 0, 0, 0);
+      if (trigger.getTime() <= Date.now()) continue; // déjà passé
+
+      const id = await N.scheduleNotificationAsync({
+        content: {
+          title: '💪 Séance prévue aujourd\'hui',
+          body: s.name,
+          sound: false,
+        },
+        trigger: {
+          type: N.SchedulableTriggerInputTypes.DATE,
+          date: trigger,
+        },
+      });
+      newIds.push(id);
+    }
+
+    await AsyncStorage.setItem(KEY_WORKOUT_REMINDER_IDS, JSON.stringify(newIds));
+  } catch {
+    /* notifications optionnelles */
   }
 }
 

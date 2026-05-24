@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useTheme } from '../hooks/useTheme';
 import { useAppStore } from '../lib/store/useAppStore';
 import { supabase } from '../lib/supabase';
@@ -219,23 +220,30 @@ export default function EditProfileScreen() {
   const uploadAvatarIfNeeded = async (userId: string): Promise<string | null> => {
     if (!avatarLocal) return avatarUri; // pas de changement
     try {
-      const response = await fetch(avatarLocal);
-      const blob = await response.blob();
-      const ext = avatarLocal.split('.').pop()?.toLowerCase() ?? 'jpg';
+      const ext  = (avatarLocal.split('.').pop()?.toLowerCase() ?? 'jpg').replace('jpeg', 'jpg');
+      const mime = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
       const path = `${userId}/avatar.${ext}`;
+
+      // ⚠️ fetch().blob() est cassé en React Native (image noire) —
+      // on passe par FileSystem base64 → Uint8Array, même approche que workoutPhotos.ts
+      const base64 = await FileSystem.readAsStringAsync(avatarLocal, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const binary = atob(base64);
+      const bytes  = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(path, blob, { contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}`, upsert: true });
+        .upload(path, bytes, { contentType: mime, upsert: true });
 
       if (uploadError) throw uploadError;
 
       const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(path);
-      // Cache-bust via timestamp
-      return `${publicUrl}?t=${Date.now()}`;
+      return `${publicUrl}?t=${Date.now()}`; // cache-bust
     } catch (err) {
-      if (__DEV__) console.warn('avatar upload', err);
-      return avatarUri; // Retomber sur l'ancienne URL sans bloquer la sauvegarde
+      if (__DEV__) console.warn('[avatar upload]', err);
+      return avatarUri; // retomber sur l'ancienne URL
     }
   };
 

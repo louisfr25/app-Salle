@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
 } from 'react-native';
@@ -6,9 +6,48 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../hooks/useTheme';
+import { useAppStore } from '../lib/store/useAppStore';
 import { supabase } from '../lib/supabase';
 import { Card } from '../components/ui/Card';
-import type { DailyLog } from '../lib/database.types';
+import type { DailyLog, Profile } from '../lib/database.types';
+
+// ── Calcul TDEE personnalisé (Mifflin-St Jeor) ───────────────────────────────
+function calcTDEE(p: Profile | null): {
+  kcal: number; protein: number; carbs: number; fat: number; complete: boolean;
+} {
+  const DEFAULT = { kcal: 2400, protein: 180, carbs: 250, fat: 70, complete: false };
+  if (!p || !p.weight_kg || !p.height_cm) return DEFAULT;
+
+  const w = p.weight_kg;
+  const h = p.height_cm;
+  let age = 25;
+  if (p.birth_date) {
+    age = new Date().getFullYear() - new Date(p.birth_date).getFullYear();
+  }
+
+  // BMR Mifflin-St Jeor
+  const bmr = p.gender === 'female'
+    ? 10 * w + 6.25 * h - 5 * age - 161
+    : 10 * w + 6.25 * h - 5 * age + 5;
+
+  // Facteur d'activité selon niveau
+  const actFactor =
+    p.level === 'advanced'     ? 1.725 :
+    p.level === 'intermediate' ? 1.55  : 1.375;
+
+  let tdee = Math.round(bmr * actFactor);
+
+  // Ajustement selon objectif
+  if (p.goal === 'muscle' || p.goal === 'strength') tdee += 300;
+  else if (p.goal === 'weight_loss')                tdee -= 400;
+
+  // Macros : protéines en priorité, lipides à 25%, glucides pour compléter
+  const protein = Math.round(w * (p.goal === 'weight_loss' ? 2.5 : 2.0));
+  const fat      = Math.round((tdee * 0.25) / 9);
+  const carbs    = Math.max(50, Math.round((tdee - protein * 4 - fat * 9) / 4));
+
+  return { kcal: tdee, protein, carbs, fat, complete: true };
+}
 
 type Colors = ReturnType<typeof useTheme>;
 
@@ -69,7 +108,12 @@ function todayStr() {
 }
 
 export default function DailyScreen() {
-  const colors = useTheme();
+  const colors  = useTheme();
+  const profile = useAppStore((s) => s.profile);
+  const tdee    = useMemo(() => calcTDEE(profile), [
+    profile?.weight_kg, profile?.height_cm, profile?.birth_date,
+    profile?.gender, profile?.goal, profile?.level,
+  ]);
   const [date, setDate] = useState(todayStr());
   const [log, setLog] = useState<Partial<DailyLog>>({ date: todayStr() });
   const [saved, setSaved] = useState(false);
@@ -140,12 +184,12 @@ export default function DailyScreen() {
     setLog((l) => ({ ...l, [key]: v }));
 
   const macros = [
-    { key: 'protein_g' as keyof DailyLog, label: 'Protéines', goal: 180, color: '#5C7CFF' },
-    { key: 'carbs_g' as keyof DailyLog,   label: 'Glucides',  goal: 250, color: colors.warn },
-    { key: 'fat_g' as keyof DailyLog,     label: 'Lipides',   goal: 70,  color: colors.danger },
+    { key: 'protein_g' as keyof DailyLog, label: 'Protéines', goal: tdee.protein, color: '#5C7CFF' },
+    { key: 'carbs_g' as keyof DailyLog,   label: 'Glucides',  goal: tdee.carbs,   color: colors.warn },
+    { key: 'fat_g' as keyof DailyLog,     label: 'Lipides',   goal: tdee.fat,     color: colors.danger },
   ];
   const totalKcal = log.calories ?? 0;
-  const kcalGoal = 2400;
+  const kcalGoal  = tdee.kcal;
 
   const isToday = date === todayStr();
   const prettyDate = new Date(date + 'T00:00:00').toLocaleDateString('fr-FR', {
@@ -191,7 +235,10 @@ export default function DailyScreen() {
                 <Text style={{ fontSize: 22, fontWeight: '800', color: colors.accent }}>{totalKcal}</Text>
                 <Text style={{ fontSize: 10, color: colors.mute }}>kcal</Text>
               </View>
-              <Text style={{ fontSize: 12, color: colors.mute, marginTop: 8 }}>Objectif : {kcalGoal} kcal</Text>
+              <Text style={{ fontSize: 12, color: colors.mute, marginTop: 8 }}>
+                Objectif : {kcalGoal} kcal
+                {tdee.complete ? ' · TDEE personnalisé' : ' · par défaut'}
+              </Text>
             </View>
 
             <View style={{ flexDirection: 'row', gap: 12 }}>
@@ -210,6 +257,24 @@ export default function DailyScreen() {
                 );
               })}
             </View>
+
+            {/* Invite à compléter le profil si TDEE non calculable */}
+            {!tdee.complete && (
+              <TouchableOpacity
+                onPress={() => router.push('/edit-profile' as any)}
+                style={{
+                  marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 8,
+                  backgroundColor: `${colors.accent}12`, borderRadius: 10,
+                  padding: 10, borderWidth: 1, borderColor: `${colors.accent}30`,
+                }}
+              >
+                <Ionicons name="person-outline" size={14} color={colors.accent} />
+                <Text style={{ flex: 1, fontSize: 12, color: colors.accent }}>
+                  Renseigne ton poids et ta taille pour personnaliser tes objectifs
+                </Text>
+                <Ionicons name="chevron-forward" size={12} color={colors.accent} />
+              </TouchableOpacity>
+            )}
           </Card>
         </View>
 

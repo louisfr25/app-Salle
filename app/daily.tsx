@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, TextInput,
+  View, Text, ScrollView, TouchableOpacity, TextInput, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
@@ -9,6 +9,12 @@ import { useTheme } from '../hooks/useTheme';
 import { useAppStore } from '../lib/store/useAppStore';
 import { supabase } from '../lib/supabase';
 import { Card } from '../components/ui/Card';
+import {
+  getTodayHealthSnapshot,
+  isHealthAvailable,
+  formatDistance,
+  type HealthSnapshot,
+} from '../lib/healthService';
 import type { DailyLog, Profile } from '../lib/database.types';
 
 // ── Calcul TDEE personnalisé (Mifflin-St Jeor) ───────────────────────────────
@@ -25,23 +31,19 @@ function calcTDEE(p: Profile | null): {
     age = new Date().getFullYear() - new Date(p.birth_date).getFullYear();
   }
 
-  // BMR Mifflin-St Jeor
   const bmr = p.gender === 'female'
     ? 10 * w + 6.25 * h - 5 * age - 161
     : 10 * w + 6.25 * h - 5 * age + 5;
 
-  // Facteur d'activité selon niveau
   const actFactor =
     p.level === 'advanced'     ? 1.725 :
     p.level === 'intermediate' ? 1.55  : 1.375;
 
   let tdee = Math.round(bmr * actFactor);
 
-  // Ajustement selon objectif
   if (p.goal === 'muscle' || p.goal === 'strength') tdee += 300;
   else if (p.goal === 'weight_loss')                tdee -= 400;
 
-  // Macros : protéines en priorité, lipides à 25%, glucides pour compléter
   const protein = Math.round(w * (p.goal === 'weight_loss' ? 2.5 : 2.0));
   const fat      = Math.round((tdee * 0.25) / 9);
   const carbs    = Math.max(50, Math.round((tdee - protein * 4 - fat * 9) / 4));
@@ -51,8 +53,7 @@ function calcTDEE(p: Profile | null): {
 
 type Colors = ReturnType<typeof useTheme>;
 
-// ── Stable Field component (declared OUTSIDE the screen so it is not
-//    recreated on every keystroke — that was dismissing the keyboard) ──
+// ── Field component ───────────────────────────────────────────────────────────
 const Field = React.memo(function Field({
   icon, label, value, onChange, unit, decimal = false, colors, badge,
 }: {
@@ -82,8 +83,7 @@ const Field = React.memo(function Field({
         <TextInput
           defaultValue={value != null ? String(value) : ''}
           onChangeText={(t) => {
-            // Normalise la virgule (séparateur décimal Android) en point
-          const n = decimal ? parseFloat(t.replace(',', '.')) : parseInt(t, 10);
+            const n = decimal ? parseFloat(t.replace(',', '.')) : parseInt(t, 10);
             onChange(Number.isFinite(n) ? n : undefined);
           }}
           keyboardType="decimal-pad"
@@ -107,6 +107,99 @@ function todayStr() {
   return new Date().toISOString().split('T')[0];
 }
 
+// ── Carte récapitulative Santé ────────────────────────────────────────────────
+function HealthCard({
+  snapshot, syncing, onSync, colors,
+}: {
+  snapshot: HealthSnapshot | null;
+  syncing: boolean;
+  onSync: () => void;
+  colors: Colors;
+}) {
+  const available = snapshot !== null && snapshot.source !== 'unavailable';
+
+  return (
+    <View style={{
+      backgroundColor: `${colors.accent}10`,
+      borderRadius: 14, borderWidth: 1, borderColor: `${colors.accent}30`,
+      padding: 14, marginBottom: 8,
+    }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: available ? 12 : 0 }}>
+        <Text style={{ fontSize: 18 }}>🍎</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>
+            Santé / Google Fit
+          </Text>
+          {snapshot?.syncedAt && available && (
+            <Text style={{ fontSize: 10, color: colors.mute }}>
+              Dernière synchro : {new Date(snapshot.syncedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+            </Text>
+          )}
+        </View>
+        <TouchableOpacity
+          onPress={onSync}
+          disabled={syncing}
+          style={{
+            flexDirection: 'row', alignItems: 'center', gap: 6,
+            backgroundColor: colors.accent, borderRadius: 10,
+            paddingHorizontal: 12, paddingVertical: 7,
+            opacity: syncing ? 0.6 : 1,
+          }}
+        >
+          {syncing ? (
+            <ActivityIndicator size="small" color={colors.accentInk} />
+          ) : (
+            <Ionicons name="sync-outline" size={14} color={colors.accentInk} />
+          )}
+          <Text style={{ fontSize: 12, fontWeight: '700', color: colors.accentInk }}>
+            {syncing ? 'Synchro…' : 'Synchroniser'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {available && snapshot && (
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          {snapshot.steps != null && (
+            <StatChip icon="👟" value={snapshot.steps.toLocaleString('fr-FR')} label="pas" colors={colors} />
+          )}
+          {snapshot.distance_m != null && (
+            <StatChip icon="📍" value={formatDistance(snapshot.distance_m)} label="distance" colors={colors} />
+          )}
+          {snapshot.cardioMinutes != null && (
+            <StatChip icon="🏃" value={`${snapshot.cardioMinutes} min`} label="cardio" colors={colors} />
+          )}
+          {snapshot.activeKcal != null && (
+            <StatChip icon="🔥" value={`${snapshot.activeKcal}`} label="kcal brûlées" colors={colors} />
+          )}
+        </View>
+      )}
+
+      {!available && !syncing && (
+        <Text style={{ fontSize: 12, color: colors.mute, marginTop: 4 }}>
+          {snapshot === null
+            ? 'Appuie sur Synchroniser pour importer tes données de santé.'
+            : "L'app Santé n'est pas disponible sur cet appareil."}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function StatChip({ icon, value, label, colors }: { icon: string; value: string; label: string; colors: Colors }) {
+  return (
+    <View style={{
+      flex: 1, alignItems: 'center', gap: 3,
+      backgroundColor: `${colors.accent}15`,
+      borderRadius: 10, paddingVertical: 8, paddingHorizontal: 4,
+    }}>
+      <Text style={{ fontSize: 16 }}>{icon}</Text>
+      <Text style={{ fontSize: 13, fontWeight: '800', color: colors.accent }}>{value}</Text>
+      <Text style={{ fontSize: 10, color: colors.mute }}>{label}</Text>
+    </View>
+  );
+}
+
+// ── Écran principal ───────────────────────────────────────────────────────────
 export default function DailyScreen() {
   const colors  = useTheme();
   const profile = useAppStore((s) => s.profile);
@@ -114,13 +207,20 @@ export default function DailyScreen() {
     profile?.weight_kg, profile?.height_cm, profile?.birth_date,
     profile?.gender, profile?.goal, profile?.level,
   ]);
+
   const [date, setDate] = useState(todayStr());
-  const [log, setLog] = useState<Partial<DailyLog>>({ date: todayStr() });
-  const [saved, setSaved] = useState(false);
-  const [stepsFromHealth, setStepsFromHealth] = useState<number | null>(null);
-  // Bump this key to force inputs to remount when the day changes / data loads
+  const [log, setLog]   = useState<Partial<DailyLog>>({ date: todayStr() });
+  const [saved, setSaved]   = useState(false);
   const [formKey, setFormKey] = useState(0);
 
+  // Santé
+  const [healthSnap,  setHealthSnap]  = useState<HealthSnapshot | null>(null);
+  const [syncing,     setSyncing]     = useState(false);
+  const [healthAvail, setHealthAvail] = useState(false);
+  // Quels champs ont été remplis automatiquement depuis la santé
+  const [fromHealth, setFromHealth] = useState<Set<keyof DailyLog>>(new Set());
+
+  // ── Chargement Supabase ──────────────────────────────────────────────────
   const loadForDate = useCallback(async (d: string) => {
     const { data: { session } } = await supabase.auth.getSession();
     const user = session?.user;
@@ -131,41 +231,64 @@ export default function DailyScreen() {
       .eq('user_id', user.id)
       .eq('date', d)
       .maybeSingle();
-    // Fresh empty form for a new day, or the saved values if they exist
     setLog(data ?? { date: d });
+    setFromHealth(new Set());
     setFormKey((k) => k + 1);
   }, []);
 
-  // Reload every time the screen is focused, recomputing "today" so the
-  // form is empty on a new day (and editable if already filled today).
+  // ── Synchro santé ────────────────────────────────────────────────────────
+  const syncHealth = useCallback(async (currentLog?: Partial<DailyLog>) => {
+    setSyncing(true);
+    try {
+      const snap = await getTodayHealthSnapshot(
+        profile?.weight_kg,
+        profile?.height_cm,
+      );
+      setHealthSnap(snap);
+
+      if (snap.source === 'unavailable') return;
+
+      const merged: Partial<DailyLog> = { ...(currentLog ?? log) };
+      const healthFields = new Set<keyof DailyLog>();
+
+      // Pas — toujours pris depuis la santé si disponible
+      if (snap.steps != null) {
+        merged.steps = snap.steps;
+        healthFields.add('steps');
+      }
+
+      // Minutes cardio — seulement si le champ est vide (ne pas écraser une saisie manuelle)
+      if (snap.cardioMinutes != null && !merged.cardio_minutes) {
+        merged.cardio_minutes = snap.cardioMinutes;
+        healthFields.add('cardio_minutes');
+      }
+
+      setLog(merged);
+      setFromHealth(healthFields);
+      setFormKey((k) => k + 1);
+    } finally {
+      setSyncing(false);
+    }
+  }, [profile?.weight_kg, profile?.height_cm, log]);
+
+  // ── Focus : recharge + synchro automatique ───────────────────────────────
   useFocusEffect(
     useCallback(() => {
       const d = todayStr();
       setDate(d);
-      loadForDate(d);
-      loadHealthSteps();
+
+      // 1. Charge les données Supabase
+      loadForDate(d).then((/* data loaded */) => {
+        // 2. Puis synchro santé par-dessus
+        syncHealth({ date: d });
+      });
+
+      // Vérifie la dispo du service
+      isHealthAvailable().then(setHealthAvail);
     }, [loadForDate]),
   );
 
-  const loadHealthSteps = async () => {
-    try {
-      // @ts-expect-error — expo-sensors optionnel (présent en Expo Go iOS)
-      const { Pedometer } = await import('expo-sensors');
-      const isAvailable = await Pedometer.isAvailableAsync();
-      if (!isAvailable) return;
-      const start = new Date();
-      start.setHours(0, 0, 0, 0);
-      const end = new Date();
-      const result = await Pedometer.getStepCountAsync(start, end);
-      if (result?.steps) {
-        setStepsFromHealth(result.steps);
-        setLog((l) => ({ ...l, steps: l.steps ?? result.steps }));
-      }
-    } catch {
-      /* mode manuel */
-    }
-  };
-
+  // ── Sauvegarde ───────────────────────────────────────────────────────────
   const save = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     const user = session?.user;
@@ -180,13 +303,20 @@ export default function DailyScreen() {
     setTimeout(() => setSaved(false), 2000);
   };
 
-  const set = (key: keyof DailyLog) => (v: number | undefined) =>
+  const set = (key: keyof DailyLog) => (v: number | undefined) => {
     setLog((l) => ({ ...l, [key]: v }));
+    // Si on modifie un champ qui venait de la santé → on retire le badge
+    setFromHealth((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  };
 
   const macros = [
     { key: 'protein_g' as keyof DailyLog, label: 'Protéines', goal: tdee.protein, color: '#5C7CFF' },
-    { key: 'carbs_g' as keyof DailyLog,   label: 'Glucides',  goal: tdee.carbs,   color: colors.warn },
-    { key: 'fat_g' as keyof DailyLog,     label: 'Lipides',   goal: tdee.fat,     color: colors.danger },
+    { key: 'carbs_g'   as keyof DailyLog, label: 'Glucides',  goal: tdee.carbs,   color: colors.warn },
+    { key: 'fat_g'     as keyof DailyLog, label: 'Lipides',   goal: tdee.fat,     color: colors.danger },
   ];
   const totalKcal = log.calories ?? 0;
   const kcalGoal  = tdee.kcal;
@@ -195,6 +325,9 @@ export default function DailyScreen() {
   const prettyDate = new Date(date + 'T00:00:00').toLocaleDateString('fr-FR', {
     weekday: 'long', day: 'numeric', month: 'long',
   });
+
+  const healthBadge = (key: keyof DailyLog) =>
+    fromHealth.has(key) ? '↑ Santé synchronisé' : undefined;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
@@ -210,15 +343,30 @@ export default function DailyScreen() {
               {prettyDate}{isToday ? " · aujourd'hui" : ''}
             </Text>
           </View>
-          {stepsFromHealth != null && (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: `${colors.accent}18`, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
+          {/* Indicateur synchro santé */}
+          {healthSnap?.source !== 'unavailable' && healthSnap !== null && (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: 4,
+              backgroundColor: `${colors.accent}18`, borderRadius: 8,
+              paddingHorizontal: 8, paddingVertical: 4,
+            }}>
               <Ionicons name="fitness-outline" size={14} color={colors.accent} />
               <Text style={{ fontSize: 12, fontWeight: '700', color: colors.accent }}>Santé</Text>
             </View>
           )}
         </View>
 
-        {/* Calories ring */}
+        {/* ── Carte Santé ───────────────────────────────────────────────────── */}
+        <View style={{ paddingHorizontal: 16, marginBottom: 4 }}>
+          <HealthCard
+            snapshot={healthSnap}
+            syncing={syncing}
+            onSync={() => syncHealth()}
+            colors={colors}
+          />
+        </View>
+
+        {/* ── Anneau calories ───────────────────────────────────────────────── */}
         <View style={{ paddingHorizontal: 16, marginBottom: 16 }}>
           <Card padding={16}>
             <View style={{ alignItems: 'center', marginBottom: 16 }}>
@@ -239,6 +387,12 @@ export default function DailyScreen() {
                 Objectif : {kcalGoal} kcal
                 {tdee.complete ? ' · TDEE personnalisé' : ' · par défaut'}
               </Text>
+              {/* Calories brûlées estimées depuis la santé */}
+              {healthSnap?.activeKcal != null && healthSnap.source !== 'unavailable' && (
+                <Text style={{ fontSize: 11, color: colors.success, marginTop: 4 }}>
+                  🔥 ~{healthSnap.activeKcal} kcal brûlées aujourd'hui
+                </Text>
+              )}
             </View>
 
             <View style={{ flexDirection: 'row', gap: 12 }}>
@@ -258,7 +412,6 @@ export default function DailyScreen() {
               })}
             </View>
 
-            {/* Invite à compléter le profil si TDEE non calculable */}
             {!tdee.complete && (
               <TouchableOpacity
                 onPress={() => router.push('/edit-profile' as any)}
@@ -278,7 +431,7 @@ export default function DailyScreen() {
           </Card>
         </View>
 
-        {/* Corps */}
+        {/* ── Corps ─────────────────────────────────────────────────────────── */}
         <View key={`corps-${formKey}`} style={{ paddingHorizontal: 16, marginBottom: 8 }}>
           <Text style={{ fontSize: 12, fontWeight: '700', color: colors.mute, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
             Corps
@@ -291,7 +444,7 @@ export default function DailyScreen() {
           </Card>
         </View>
 
-        {/* Nutrition */}
+        {/* ── Nutrition ─────────────────────────────────────────────────────── */}
         <View key={`nutri-${formKey}`} style={{ paddingHorizontal: 16, marginBottom: 8 }}>
           <Text style={{ fontSize: 12, fontWeight: '700', color: colors.mute, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
             Nutrition
@@ -306,23 +459,40 @@ export default function DailyScreen() {
           </Card>
         </View>
 
-        {/* Activité */}
+        {/* ── Activité ──────────────────────────────────────────────────────── */}
         <View key={`act-${formKey}`} style={{ paddingHorizontal: 16, marginBottom: 24 }}>
-          <Text style={{ fontSize: 12, fontWeight: '700', color: colors.mute, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
-            Activité
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <Text style={{ fontSize: 12, fontWeight: '700', color: colors.mute, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              Activité
+            </Text>
+            {healthSnap?.distance_m != null && healthSnap.source !== 'unavailable' && (
+              <Text style={{ fontSize: 11, color: colors.accent, fontWeight: '600' }}>
+                📍 {formatDistance(healthSnap.distance_m)} parcourus
+              </Text>
+            )}
+          </View>
           <Card padding={0} style={{ overflow: 'hidden' }}>
             <Field
-              icon="👟" label="Pas" value={log.steps} onChange={set('steps')} unit="pas" colors={colors}
-              badge={stepsFromHealth != null ? '↑ Santé iPhone' : undefined}
+              icon="👟" label="Pas"
+              value={log.steps} onChange={set('steps')} unit="pas"
+              colors={colors} badge={healthBadge('steps')}
             />
             <View style={{ borderBottomWidth: 0 }}>
-              <Field icon="🏃" label="Cardio" value={log.cardio_minutes} onChange={set('cardio_minutes')} unit="min" colors={colors} />
+              <Field
+                icon="🏃" label="Cardio"
+                value={log.cardio_minutes} onChange={set('cardio_minutes')} unit="min"
+                colors={colors} badge={healthBadge('cardio_minutes')}
+              />
             </View>
           </Card>
+          {fromHealth.has('cardio_minutes') && (
+            <Text style={{ fontSize: 10, color: colors.mute, marginTop: 6, paddingHorizontal: 4 }}>
+              * Minutes cardio estimées depuis tes pas. Tu peux les ajuster manuellement.
+            </Text>
+          )}
         </View>
 
-        {/* Sauvegarder */}
+        {/* ── Sauvegarder ───────────────────────────────────────────────────── */}
         <View style={{ paddingHorizontal: 16 }}>
           <TouchableOpacity
             onPress={save}
@@ -336,7 +506,7 @@ export default function DailyScreen() {
             </Text>
           </TouchableOpacity>
           <Text style={{ fontSize: 11, color: colors.mute, textAlign: 'center', marginTop: 10 }}>
-            Reviens chaque jour : un nouveau formulaire t'attend pour suivre ta progression.
+            Les données de santé sont synchronisées automatiquement à chaque ouverture.
           </Text>
         </View>
       </ScrollView>

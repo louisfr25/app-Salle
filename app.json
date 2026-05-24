@@ -94,7 +94,13 @@
           "isAccessMediaLocationEnabled": true
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-sensors",
+        {
+          "motionPermission": "Salle utilise le podomètre pour compter tes pas et synchroniser ton activité quotidienne."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

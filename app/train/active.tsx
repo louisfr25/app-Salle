@@ -59,6 +59,9 @@ export default function ActiveWorkoutScreen() {
   const [result, setResult] = useState<WorkoutResult | null>(null);
   // Suggestions de progressive overload par index d'exercice
   const [suggestions, setSuggestions] = useState<ProgressionSuggestion[]>([]);
+  // Note de séance (étoiles + commentaire)
+  const [sessionRating, setSessionRating] = useState<number>(0);
+  const [sessionNotes,  setSessionNotes]  = useState<string>('');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [search, setSearch] = useState('');
   // Photo de séance
@@ -352,8 +355,20 @@ export default function ActiveWorkoutScreen() {
     }
   };
 
-  const dismissResult = () => {
+  const dismissResult = async () => {
+    // Sauvegarde note + commentaire dans workout_logs
+    if (workoutLogId && (sessionRating > 0 || sessionNotes.trim())) {
+      await supabase
+        .from('workout_logs')
+        .update({
+          rating: sessionRating > 0 ? sessionRating : null,
+          notes:  sessionNotes.trim() || null,
+        })
+        .eq('id', workoutLogId);
+    }
     setResult(null);
+    setSessionRating(0);
+    setSessionNotes('');
     reset();
     router.replace('/(tabs)');
   };
@@ -940,11 +955,46 @@ export default function ActiveWorkoutScreen() {
               </Card>
             )}
 
+            {/* ── Note de séance ──────────────────────────────────── */}
+            <Card padding={16} style={{ marginBottom: 14, gap: 12 }}>
+              <Text style={{ fontSize: 12, fontWeight: '700', color: colors.mute, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                Comment s'est passée la séance ?
+              </Text>
+              {/* Étoiles */}
+              <View style={{ flexDirection: 'row', gap: 8, justifyContent: 'center' }}>
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <TouchableOpacity key={star} onPress={() => setSessionRating(star)} activeOpacity={0.7}>
+                    <Text style={{ fontSize: 32, opacity: star <= sessionRating ? 1 : 0.25 }}>⭐</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {sessionRating > 0 && (
+                <Text style={{ fontSize: 12, color: colors.mute, textAlign: 'center' }}>
+                  {['', 'Difficile 😤', 'Correct 🙂', 'Bien 💪', 'Très bien 🔥', 'Parfait ! 🏆'][sessionRating]}
+                </Text>
+              )}
+              {/* Notes */}
+              <TextInput
+                value={sessionNotes}
+                onChangeText={setSessionNotes}
+                placeholder="Ajoute un commentaire… (optionnel)"
+                placeholderTextColor={colors.mute}
+                multiline
+                maxLength={300}
+                style={{
+                  backgroundColor: colors.surface2, borderRadius: 10,
+                  borderWidth: 1, borderColor: colors.border,
+                  padding: 12, color: colors.text, fontSize: 14,
+                  minHeight: 60, textAlignVertical: 'top',
+                }}
+              />
+            </Card>
+
             <TouchableOpacity
               onPress={dismissResult}
               style={{ backgroundColor: colors.accent, borderRadius: 16, padding: 16, alignItems: 'center', marginTop: 8 }}
             >
-              <Text style={{ color: colors.accentInk, fontWeight: '800', fontSize: 16 }}>Continuer</Text>
+              <Text style={{ color: colors.accentInk, fontWeight: '800', fontSize: 16 }}>Terminer 🎉</Text>
             </TouchableOpacity>
           </ScrollView>
         </View>

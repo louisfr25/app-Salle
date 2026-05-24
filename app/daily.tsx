@@ -438,10 +438,46 @@ export default function DailyScreen() {
           </Text>
           <Card padding={0} style={{ overflow: 'hidden' }}>
             <Field icon="⚖️" label="Poids corporel" value={log.body_weight_kg} onChange={set('body_weight_kg')} unit="kg" decimal colors={colors} />
+            <Field icon="💧" label="Eau consommée" value={log.water_ml} onChange={set('water_ml')} unit="ml" colors={colors} />
             <View style={{ borderBottomWidth: 0 }}>
-              <Field icon="💧" label="Eau consommée" value={log.water_ml} onChange={set('water_ml')} unit="ml" colors={colors} />
+              <Field
+                icon="😴" label="Sommeil"
+                value={log.sleep_hours} onChange={set('sleep_hours')} unit="h"
+                decimal colors={colors}
+                badge={log.sleep_hours != null
+                  ? (log.sleep_hours >= 7 ? '✓ Bonne nuit' : log.sleep_hours >= 5 ? '⚠ Court' : '⚠ Trop court')
+                  : undefined}
+              />
             </View>
           </Card>
+          {/* Indicateur qualité de sommeil */}
+          {log.sleep_hours != null && (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8,
+              paddingHorizontal: 4,
+            }}>
+              {[
+                { max: 4,  label: '😩 Récupération compromise', color: colors.danger },
+                { max: 6,  label: '😐 Sommeil insuffisant',     color: colors.warn },
+                { max: 8,  label: '😊 Sommeil correct',          color: colors.success },
+                { max: 99, label: '🌟 Sommeil optimal',          color: colors.accent },
+              ].map((tier) => {
+                if ((log.sleep_hours ?? 0) > tier.max) return null;
+                return (
+                  <View
+                    key={tier.label}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6,
+                      backgroundColor: `${tier.color}15`, borderRadius: 8,
+                      paddingHorizontal: 10, paddingVertical: 5 }}
+                  >
+                    <Text style={{ fontSize: 12, color: tier.color, fontWeight: '600' }}>
+                      {tier.label}
+                    </Text>
+                  </View>
+                );
+              }).find(Boolean)}
+            </View>
+          )}
         </View>
 
         {/* ── Nutrition ─────────────────────────────────────────────────────── */}
